@@ -31,18 +31,19 @@ import kafka.message.{ByteBufferMessageSet, MessageSet}
 import kafka.network._
 import kafka.network.RequestChannel.{Session, Response}
 import kafka.security.auth.{Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
+import kafka.server.MetadataCache.Metadata
 import kafka.utils.{Logging, SystemTime, ZKGroupTopicDirs, ZkUtils}
 import org.apache.kafka.common.errors.{InvalidTopicException, NotLeaderForPartitionException, UnknownTopicOrPartitionException,
 ClusterAuthorizationException}
 import org.apache.kafka.common.metrics.Metrics
-import org.apache.kafka.common.protocol.{ProtoUtils, ApiKeys, Errors, SecurityProtocol}
+import org.apache.kafka.common.protocol.{ApiKeys, Errors, SecurityProtocol}
 import org.apache.kafka.common.requests.{ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
 DescribeGroupsRequest, DescribeGroupsResponse, HeartbeatRequest, HeartbeatResponse, JoinGroupRequest, JoinGroupResponse,
 LeaveGroupRequest, LeaveGroupResponse, ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest, LeaderAndIsrResponse,
-StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse}
+StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse, UpdateMetadataRequest, UpdateMetadataResponse, MetadataRequest, MetadataResponse}
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.utils.Utils
-import org.apache.kafka.common.{TopicPartition, Node}
+import org.apache.kafka.common.{Cluster, TopicPartition, Node}
 
 import scala.collection._
 import scala.collection.JavaConverters._
@@ -175,14 +176,19 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleUpdateMetadataRequest(request: RequestChannel.Request) {
-    val updateMetadataRequest = request.requestObj.asInstanceOf[UpdateMetadataRequest]
+    val correlationId = request.header.correlationId
+    val updateMetadataRequest = request.body.asInstanceOf[UpdateMetadataRequest]
 
-    authorizeClusterAction(request)
+    val responseHeader = new ResponseHeader(correlationId)
+    val updateMetadataResponse =
+      if (authorize(request.session, ClusterAction, Resource.ClusterResource)) {
+        replicaManager.maybeUpdateMetadataCache(correlationId, updateMetadataRequest, metadataCache)
+        new UpdateMetadataResponse(Errors.NONE.code)
+      } else {
+        new UpdateMetadataResponse(Errors.CLUSTER_AUTHORIZATION_FAILED.code)
+      }
 
-    replicaManager.maybeUpdateMetadataCache(updateMetadataRequest, metadataCache)
-
-    val updateMetadataResponse = new UpdateMetadataResponse(updateMetadataRequest.correlationId)
-    requestChannel.sendResponse(new Response(request, new RequestOrResponseSend(request.connectionId, updateMetadataResponse)))
+    requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, responseHeader, updateMetadataResponse)))
   }
 
   def handleControlledShutdownRequest(request: RequestChannel.Request) {
@@ -249,7 +255,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case (topicAndPartition, metaAndError) => {
           val topicDirs = new ZKGroupTopicDirs(offsetCommitRequest.groupId, topicAndPartition.topic)
           try {
-            if (metadataCache.getTopicMetadata(Set(topicAndPartition.topic), request.securityProtocol).size <= 0) {
+            if (metadataCache.getTopicMetadata(Set(topicAndPartition.topic), request.securityProtocol).partitions.size <= 0) {
               (topicAndPartition, Errors.UNKNOWN_TOPIC_OR_PARTITION.code)
             } else if (metaAndError.metadata != null && metaAndError.metadata.length > config.offsetMetadataMaxSize) {
               (topicAndPartition, Errors.OFFSET_METADATA_TOO_LARGE.code)
@@ -586,15 +592,17 @@ class KafkaApis(val requestChannel: RequestChannel,
     ret.toSeq.sortBy(- _)
   }
 
-  private def getTopicMetadata(topics: Set[String], securityProtocol: SecurityProtocol): Seq[TopicMetadata] = {
-    val topicResponses = metadataCache.getTopicMetadata(topics, securityProtocol)
-    if (topics.size > 0 && topicResponses.size != topics.size) {
-      val nonExistentTopics = topics -- topicResponses.map(_.topic).toSet
-      val responsesForNonExistentTopics = nonExistentTopics.map { topic =>
+  private def getTopicMetadata(topics: Set[String], securityProtocol: SecurityProtocol): Metadata = {
+    val metadata = metadataCache.getTopicMetadata(topics, securityProtocol)
+    val topicResponses = metadata.partitions.groupBy(_.topic())
+
+    if (topics.nonEmpty && topicResponses.size != topics.size) {
+      val nonExistentTopics = topics -- topicResponses.keySet
+      val responsesForNonExistentTopics = nonExistentTopics.foreach { topic =>
         if (topic == GroupCoordinator.GroupMetadataTopicName || config.autoCreateTopicsEnable) {
           try {
             if (topic == GroupCoordinator.GroupMetadataTopicName) {
-              val aliveBrokers = metadataCache.getAliveBrokers
+              val aliveBrokers = metadataCache.getAliveNodes(securityProtocol)
               val offsetsTopicReplicationFactor =
                 if (aliveBrokers.length > 0)
                   Math.min(config.offsetsTopicReplicationFactor.toInt, aliveBrokers.length)
@@ -605,49 +613,50 @@ class KafkaApis(val requestChannel: RequestChannel,
                                      coordinator.offsetsTopicConfigs)
               info("Auto creation of topic %s with %d partitions and replication factor %d is successful!"
                 .format(topic, config.offsetsTopicPartitions, offsetsTopicReplicationFactor))
+              metadata.errors.put(topic, Errors.LEADER_NOT_AVAILABLE)
             }
             else {
               AdminUtils.createTopic(zkUtils, topic, config.numPartitions, config.defaultReplicationFactor)
               info("Auto creation of topic %s with %d partitions and replication factor %d is successful!"
                    .format(topic, config.numPartitions, config.defaultReplicationFactor))
+              metadata.errors.put(topic, Errors.LEADER_NOT_AVAILABLE)
             }
-            new TopicMetadata(topic, Seq.empty[PartitionMetadata], Errors.LEADER_NOT_AVAILABLE.code)
           } catch {
             case e: TopicExistsException => // let it go, possibly another broker created this topic
-              new TopicMetadata(topic, Seq.empty[PartitionMetadata], Errors.LEADER_NOT_AVAILABLE.code)
+              metadata.errors.put(topic, Errors.LEADER_NOT_AVAILABLE)
             case itex: InvalidTopicException =>
-              new TopicMetadata(topic, Seq.empty[PartitionMetadata], Errors.INVALID_TOPIC_EXCEPTION.code)
+              metadata.errors.put(topic, Errors.INVALID_TOPIC_EXCEPTION)
           }
         } else {
-          new TopicMetadata(topic, Seq.empty[PartitionMetadata], Errors.UNKNOWN_TOPIC_OR_PARTITION.code)
+          metadata.errors.put(topic, Errors.UNKNOWN_TOPIC_OR_PARTITION)
         }
       }
-      topicResponses.appendAll(responsesForNonExistentTopics)
     }
-    topicResponses
+    metadata
   }
 
   /**
    * Handle a topic metadata request
    */
   def handleTopicMetadataRequest(request: RequestChannel.Request) {
-    val metadataRequest = request.requestObj.asInstanceOf[TopicMetadataRequest]
+    val header = request.header
+    val metadataRequest = request.body.asInstanceOf[MetadataRequest]
 
     //if topics is empty -> fetch all topics metadata but filter out the topic response that are not authorized
     val topics = if (metadataRequest.topics.isEmpty) {
-      val topicResponses = metadataCache.getTopicMetadata(metadataRequest.topics.toSet, request.securityProtocol)
-      topicResponses.map(_.topic).filter(topic => authorize(request.session, Describe, new Resource(Topic, topic))).toSet
+      val topicResponses = metadataCache.getTopicMetadata(metadataRequest.topics.asScala.toSet, request.securityProtocol)
+      topicResponses.partitions.map(_.topic).toSet.filter(topic => authorize(request.session, Describe, new Resource(Topic, topic))).toSet
     } else {
-      metadataRequest.topics.toSet
+      metadataRequest.topics.asScala.toSet
     }
 
     //when topics is empty this will be a duplicate authorization check but given this should just be a cache lookup, it should not matter.
     var (authorizedTopics, unauthorizedTopics) = topics.partition(topic => authorize(request.session, Describe, new Resource(Topic, topic)))
 
-    if (!authorizedTopics.isEmpty) {
+    if (authorizedTopics.nonEmpty) {
       val topicResponses = metadataCache.getTopicMetadata(authorizedTopics, request.securityProtocol)
-      if (config.autoCreateTopicsEnable && topicResponses.size != authorizedTopics.size) {
-        val nonExistentTopics: Set[String] = topics -- topicResponses.map(_.topic).toSet
+      if (config.autoCreateTopicsEnable && topicResponses.partitions.map(_.topic).toSet.size != authorizedTopics.size) {
+        val nonExistentTopics: Set[String] = topics -- topicResponses.partitions.map(_.topic).toSet
         authorizer.foreach {
           az => if (!az.authorize(request.session, Create, Resource.ClusterResource)) {
             authorizedTopics --= nonExistentTopics
@@ -657,13 +666,18 @@ class KafkaApis(val requestChannel: RequestChannel,
       }
     }
 
-    val unauthorizedTopicMetaData = unauthorizedTopics.map(topic => new TopicMetadata(topic, Seq.empty[PartitionMetadata], Errors.TOPIC_AUTHORIZATION_FAILED.code))
+    val unauthorizedTopicErrors = unauthorizedTopics.map(topic => (topic, Errors.TOPIC_AUTHORIZATION_FAILED)).toMap
 
-    val topicMetadata = if (authorizedTopics.isEmpty) Seq.empty[TopicMetadata] else getTopicMetadata(authorizedTopics, request.securityProtocol)
-    val brokers = metadataCache.getAliveBrokers
-    trace("Sending topic metadata %s and brokers %s for correlation id %d to client %s".format(topicMetadata.mkString(","), brokers.mkString(","), metadataRequest.correlationId, metadataRequest.clientId))
-    val response = new TopicMetadataResponse(brokers.map(_.getBrokerEndPoint(request.securityProtocol)), topicMetadata  ++ unauthorizedTopicMetaData, metadataRequest.correlationId)
-    requestChannel.sendResponse(new RequestChannel.Response(request, new RequestOrResponseSend(request.connectionId, response)))
+    val metadata = if (authorizedTopics.isEmpty) Metadata(Seq(), mutable.Map()) else getTopicMetadata(authorizedTopics, request.securityProtocol)
+
+    val brokers = metadataCache.getAliveNodes(request.securityProtocol)
+    val cluster = new Cluster(brokers.asJava, metadata.partitions.asJavaCollection, unauthorizedTopics.asJava)
+
+    val responseHeader = new ResponseHeader(header.correlationId)
+    val response = new MetadataResponse(cluster, (metadata.errors ++ unauthorizedTopicErrors).asJava)
+
+    trace("Sending metadata %s for correlation id %d to client %s".format(response, header.correlationId, header.clientId))
+    requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, response)))
   }
 
   /*
@@ -693,7 +707,7 @@ class KafkaApis(val requestChannel: RequestChannel,
       val responseInfo = authorizedTopicPartitions.map( topicAndPartition => {
         val topicDirs = new ZKGroupTopicDirs(offsetFetchRequest.groupId, topicAndPartition.topic)
         try {
-          if (metadataCache.getTopicMetadata(Set(topicAndPartition.topic), request.securityProtocol).size <= 0) {
+          if (metadataCache.getTopicMetadata(Set(topicAndPartition.topic), request.securityProtocol).partitions.size <= 0) {
             (topicAndPartition, OffsetMetadataAndError.UnknownTopicOrPartition)
           } else {
             val payloadOpt = zkUtils.readDataMaybeNull(topicDirs.consumerOffsetDir + "/" + topicAndPartition.partition)._1
@@ -737,16 +751,14 @@ class KafkaApis(val requestChannel: RequestChannel,
       val partition = coordinator.partitionFor(groupCoordinatorRequest.groupId)
 
       // get metadata (and create the topic if necessary)
-      val offsetsTopicMetadata = getTopicMetadata(Set(GroupCoordinator.GroupMetadataTopicName), request.securityProtocol).head
-      val coordinatorEndpoint = offsetsTopicMetadata.partitionsMetadata.find(_.partitionId == partition).flatMap {
-        partitionMetadata => partitionMetadata.leader
-      }
+      val offsetsTopicMetadata = getTopicMetadata(Set(GroupCoordinator.GroupMetadataTopicName), request.securityProtocol)
+      val coordinatorNode = offsetsTopicMetadata.partitions.find(_.partition == partition).map(_.leader)
 
-      val responseBody = coordinatorEndpoint match {
+      val responseBody = coordinatorNode match {
         case None =>
           new GroupCoordinatorResponse(Errors.GROUP_COORDINATOR_NOT_AVAILABLE.code, Node.noNode())
         case Some(endpoint) =>
-          new GroupCoordinatorResponse(Errors.NONE.code, new Node(endpoint.id, endpoint.host, endpoint.port))
+          new GroupCoordinatorResponse(Errors.NONE.code, endpoint)
       }
 
       trace("Sending consumer metadata %s for correlation id %d to client %s."

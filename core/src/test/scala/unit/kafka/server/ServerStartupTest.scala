@@ -22,6 +22,7 @@ import kafka.utils.CoreUtils
 import kafka.utils.TestUtils
 
 import kafka.zk.ZooKeeperTestHarness
+import org.apache.kafka.common.protocol.SecurityProtocol
 import org.junit.Assert._
 import org.junit.Test
 
@@ -75,9 +76,9 @@ class ServerStartupTest extends ZooKeeperTestHarness {
     val props = TestUtils.createBrokerConfig(brokerId, zkConnect)
     val server = TestUtils.createServer(KafkaConfig.fromProps(props))
 
-    TestUtils.waitUntilTrue(() => server.metadataCache.getAliveBrokers.nonEmpty, "Wait for cache to update")
-    assertEquals(1, server.metadataCache.getAliveBrokers.size)
-    assertEquals(brokerId, server.metadataCache.getAliveBrokers.head.id)
+    TestUtils.waitUntilTrue(() => server.metadataCache.getAliveNodes(SecurityProtocol.PLAINTEXT).nonEmpty, "Wait for cache to update")
+    assertEquals(1, server.metadataCache.getAliveNodes(SecurityProtocol.PLAINTEXT).size)
+    assertEquals(brokerId, server.metadataCache.getAliveNodes(SecurityProtocol.PLAINTEXT).head.id)
 
     server.shutdown()
     CoreUtils.rm(server.config.logDirs)

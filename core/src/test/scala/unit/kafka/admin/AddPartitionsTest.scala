@@ -17,6 +17,7 @@
 
 package kafka.admin
 
+import org.apache.log4j.{Level, Logger}
 import org.junit.Assert._
 import org.apache.kafka.common.protocol.SecurityProtocol
 import kafka.zk.ZooKeeperTestHarness
@@ -42,6 +43,8 @@ class AddPartitionsTest extends ZooKeeperTestHarness {
   @Before
   override def setUp() {
     super.setUp()
+
+    Logger.getLogger("kafka.server.MetadataCache").setLevel(Level.DEBUG)
 
     configs = (0 until 4).map(i => KafkaConfig.fromProps(TestUtils.createBrokerConfig(i, zkConnect, enableControlledShutdown = false)))
     // start all the servers
@@ -149,8 +152,12 @@ class AddPartitionsTest extends ZooKeeperTestHarness {
     TestUtils.waitUntilMetadataIsPropagated(servers, topic3, 5)
     TestUtils.waitUntilMetadataIsPropagated(servers, topic3, 6)
 
+    Logger.getLogger("kafka.server.MetadataCache").setLevel(Level.DEBUG)
+
     val metadata = ClientUtils.fetchTopicMetadata(Set(topic3), brokers.map(_.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)), "AddPartitionsTest-testReplicaPlacement",
       2000,0).topicsMetadata
+
+    println(metadata)
 
     val metaDataForTopic3 = metadata.filter(p => p.topic.equals(topic3)).head
     val partitionsMetadataForTopic3 = metaDataForTopic3.partitionsMetadata.sortBy(_.partitionId)
@@ -162,7 +169,7 @@ class AddPartitionsTest extends ZooKeeperTestHarness {
     val partition6DataForTopic3 = partitionsMetadataForTopic3(6)
 
     assertEquals(partition1DataForTopic3.replicas.size, 4)
-    assertEquals(partition1DataForTopic3.replicas(0).id, 3)
+    assertEquals(partition1DataForTopic3.replicas(0).id, 2)
     assertEquals(partition1DataForTopic3.replicas(1).id, 2)
     assertEquals(partition1DataForTopic3.replicas(2).id, 0)
     assertEquals(partition1DataForTopic3.replicas(3).id, 1)

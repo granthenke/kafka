@@ -787,7 +787,7 @@ object TestUtils extends Logging {
           partitionStateOpt match {
             case None => false
             case Some(partitionState) =>
-              leader = partitionState.leaderIsrAndControllerEpoch.leaderAndIsr.leader
+              leader = partitionState.leader
               result && Request.isValidBrokerId(leader)
           }
       },
@@ -798,7 +798,7 @@ object TestUtils extends Logging {
   }
 
   def waitUntilLeaderIsKnown(servers: Seq[KafkaServer], topic: String, partition: Int, timeout: Long = 5000L): Unit = {
-    TestUtils.waitUntilTrue(() => 
+    TestUtils.waitUntilTrue(() =>
       servers.exists { server =>
         server.replicaManager.getPartition(topic, partition).exists(_.leaderReplicaIfLocal().isDefined)
       },
