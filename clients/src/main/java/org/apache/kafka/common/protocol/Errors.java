@@ -30,8 +30,12 @@ import org.apache.kafka.common.errors.GroupLoadInProgressException;
 import org.apache.kafka.common.errors.IllegalGenerationException;
 import org.apache.kafka.common.errors.InconsistentGroupProtocolException;
 import org.apache.kafka.common.errors.InvalidCommitOffsetSizeException;
+import org.apache.kafka.common.errors.InvalidEntityConfigurationException;
 import org.apache.kafka.common.errors.InvalidFetchSizeException;
 import org.apache.kafka.common.errors.InvalidGroupIdException;
+import org.apache.kafka.common.errors.InvalidPartitionsException;
+import org.apache.kafka.common.errors.InvalidReplicaAssignmentException;
+import org.apache.kafka.common.errors.InvalidReplicationFactorException;
 import org.apache.kafka.common.errors.InvalidRequiredAcksException;
 import org.apache.kafka.common.errors.InvalidSessionTimeoutException;
 import org.apache.kafka.common.errors.InvalidTopicException;
@@ -49,6 +53,7 @@ import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.apache.kafka.common.errors.ReplicaNotAvailableException;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownMemberIdException;
 import org.apache.kafka.common.errors.UnknownServerException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
@@ -125,7 +130,17 @@ public enum Errors {
     GROUP_AUTHORIZATION_FAILED(30,
             new GroupAuthorizationException("Group authorization failed.")),
     CLUSTER_AUTHORIZATION_FAILED(31,
-            new ClusterAuthorizationException("Cluster authorization failed."));
+            new ClusterAuthorizationException("Cluster authorization failed.")),
+    TOPIC_ALREADY_EXISTS(32,
+            new TopicExistsException("Topic with this name already exists.")),
+    INVALID_PARTITIONS(33,
+            new InvalidPartitionsException("Number of partitions is invalid.")),
+    INVALID_REPLICATION_FACTOR(34,
+            new InvalidReplicationFactorException("Replication-factor is invalid.")),
+    INVALID_REPLICA_ASSIGNMENT(35,
+            new InvalidReplicaAssignmentException("Replica assignment is invalid.")),
+    INVALID_ENTITY_CONFIG(36,
+            new InvalidEntityConfigurationException("Entity configuration is invalid."));
 
     private static final Logger log = LoggerFactory.getLogger(Errors.class);
 

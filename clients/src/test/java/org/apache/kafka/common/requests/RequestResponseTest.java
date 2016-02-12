@@ -91,7 +91,10 @@ public class RequestResponseTest {
                 createUpdateMetadataResponse(),
                 createLeaderAndIsrRequest(),
                 createLeaderAndIsrRequest().getErrorResponse(0, new UnknownServerException()),
-                createLeaderAndIsrResponse()
+                createLeaderAndIsrResponse(),
+                createCreateTopicRequest(),
+                createCreateTopicRequest().getErrorResponse(0, new UnknownServerException()),
+                createCreateTopicResponse()
         );
 
         for (AbstractRequestResponse req : requestResponseList)
@@ -393,5 +396,28 @@ public class RequestResponseTest {
         return new UpdateMetadataResponse(Errors.NONE.code());
     }
 
+    private AbstractRequest createCreateTopicRequest() {
+        CreateTopicRequest.TopicDetails request1 = new CreateTopicRequest.TopicDetails(3, 5);
 
+        Map<Integer, List<Integer>> replicaAssignments = new HashMap<Integer, List<Integer>>();
+        replicaAssignments.put(1, Arrays.asList(1, 2, 3));
+        replicaAssignments.put(2, Arrays.asList(2, 3, 4));
+
+        Map<String, String> configs = new HashMap<String, String>();
+        configs.put("config1", "value1");
+
+        CreateTopicRequest.TopicDetails request2 = new CreateTopicRequest.TopicDetails(replicaAssignments, configs);
+
+        Map<String, CreateTopicRequest.TopicDetails> request = new HashMap<String, CreateTopicRequest.TopicDetails>();
+        request.put("my_t1", request1);
+        request.put("my_t2", request2);
+        return new CreateTopicRequest(request, 5000);
+    }
+
+    private AbstractRequestResponse createCreateTopicResponse() {
+        Map<String, Errors> errors = new HashMap<String, Errors>();
+        errors.put("t1", Errors.INVALID_TOPIC_EXCEPTION);
+        errors.put("t2", Errors.LEADER_NOT_AVAILABLE);
+        return new CreateTopicResponse(errors);
+    }
 }

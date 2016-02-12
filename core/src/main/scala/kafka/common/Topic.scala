@@ -17,6 +17,8 @@
 
 package kafka.common
 
+import org.apache.kafka.common.errors.InvalidTopicException
+
 import util.matching.Regex
 import kafka.coordinator.GroupCoordinator
 

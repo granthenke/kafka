@@ -17,6 +17,7 @@
 
 package kafka.common
 
+import org.apache.kafka.common.errors.InvalidTopicException
 import org.junit.Assert._
 import collection.mutable.ArrayBuffer
 import org.junit.Test

@@ -28,7 +28,8 @@ import kafka.api.{TopicMetadata, PartitionMetadata}
 
 import java.util.Random
 import java.util.Properties
-import org.apache.kafka.common.errors.{ReplicaNotAvailableException, InvalidTopicException, LeaderNotAvailableException}
+import org.apache.kafka.common.errors.{InvalidReplicationFactorException, ReplicaNotAvailableException, InvalidTopicException,
+LeaderNotAvailableException, InvalidReplicaAssignmentException, InvalidPartitionsException, TopicExistsException}
 import org.apache.kafka.common.protocol.{Errors, SecurityProtocol}
 
 import scala.Predef._
@@ -70,11 +71,11 @@ object AdminUtils extends Logging {
                               startPartitionId: Int = -1)
   : Map[Int, Seq[Int]] = {
     if (nPartitions <= 0)
-      throw new AdminOperationException("number of partitions must be larger than 0")
+      throw new InvalidPartitionsException("number of partitions must be larger than 0")
     if (replicationFactor <= 0)
-      throw new AdminOperationException("replication factor must be larger than 0")
+      throw new InvalidReplicationFactorException("replication factor must be larger than 0")
     if (replicationFactor > brokerList.size)
-      throw new AdminOperationException("replication factor: " + replicationFactor +
+      throw new InvalidReplicationFactorException("replication factor: " + replicationFactor +
         " larger than available brokers: " + brokerList.size)
     val ret = new mutable.HashMap[Int, List[Int]]()
     val startIndex = if (fixedStartIndex >= 0) fixedStartIndex else rand.nextInt(brokerList.size)
@@ -252,7 +253,6 @@ object AdminUtils extends Logging {
                                                      update: Boolean = false) {
     // validate arguments
     Topic.validate(topic)
-    require(partitionReplicaAssignment.values.map(_.size).toSet.size == 1, "All partitions should have the same number of replicas.")
 
     val topicPath = getTopicPath(topic)
 
@@ -268,7 +268,13 @@ object AdminUtils extends Logging {
       }
     }
 
-    partitionReplicaAssignment.values.foreach(reps => require(reps.size == reps.toSet.size, "Duplicate replica assignment found: "  + partitionReplicaAssignment))
+    if (partitionReplicaAssignment.values.map(_.size).toSet.size != 1)
+      throw new InvalidReplicaAssignmentException("All partitions should have the same number of replicas")
+
+    partitionReplicaAssignment.values.foreach(reps =>
+      if (reps.size != reps.toSet.size)
+        throw new InvalidReplicaAssignmentException("Duplicate replica assignment found: " + partitionReplicaAssignment)
+    )
 
     // Configs only matter if a topic is being created. Changing configs via AlterTopic is not supported
     if (!update) {

@@ -19,6 +19,7 @@ package kafka.log
 
 import java.util.Properties
 import kafka.server.KafkaConfig
+import org.apache.kafka.common.errors.InvalidEntityConfigurationException
 import org.apache.kafka.common.utils.Utils
 import scala.collection._
 import org.apache.kafka.common.config.{AbstractConfig, ConfigDef}
@@ -184,8 +185,9 @@ object LogConfig {
   def validateNames(props: Properties) {
     import JavaConversions._
     val names = configDef.names()
-    for(name <- props.keys)
-      require(names.contains(name), "Unknown configuration \"%s\".".format(name))
+    for (name <- props.keys)
+      if (!names.contains(name))
+        throw new InvalidEntityConfigurationException("Unknown configuration \"%s\".".format(name))
   }
 
   /**

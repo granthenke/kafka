@@ -19,11 +19,12 @@ package kafka.admin
 
 import joptsimple._
 import java.util.Properties
-import kafka.common.{TopicExistsException, Topic, AdminCommandFailedException}
+import kafka.common.{Topic, AdminCommandFailedException}
 import kafka.utils.CommandLineUtils
 import kafka.utils._
 import kafka.utils.ZkUtils._
 import org.I0Itec.zkclient.exception.ZkNodeExistsException
+import org.apache.kafka.common.errors.TopicExistsException
 import scala.collection._
 import scala.collection.JavaConversions._
 import kafka.log.{Defaults, LogConfig}
