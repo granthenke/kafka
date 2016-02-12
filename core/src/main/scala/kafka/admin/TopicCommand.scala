@@ -20,7 +20,7 @@ package kafka.admin
 import java.util.Properties
 
 import joptsimple._
-import kafka.common.{AdminCommandFailedException, Topic, TopicExistsException}
+import kafka.common.{AdminCommandFailedException, Topic}
 import kafka.consumer.{ConsumerConfig, Whitelist}
 import kafka.coordinator.GroupCoordinator
 import kafka.log.{Defaults, LogConfig}
@@ -28,6 +28,7 @@ import kafka.server.ConfigType
 import kafka.utils.ZkUtils._
 import kafka.utils._
 import org.I0Itec.zkclient.exception.ZkNodeExistsException
+import org.apache.kafka.common.errors.TopicExistsException
 import org.apache.kafka.common.security.JaasUtils
 import org.apache.kafka.common.utils.Utils
 

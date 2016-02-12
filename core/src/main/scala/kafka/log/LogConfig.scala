@@ -19,6 +19,8 @@ package kafka.log
 
 import java.util.Properties
 
+import org.apache.kafka.common.errors.InvalidConfigurationException
+
 import scala.collection.JavaConverters._
 
 import kafka.api.ApiVersion
@@ -27,6 +29,10 @@ import kafka.server.KafkaConfig
 import org.apache.kafka.common.config.{AbstractConfig, ConfigDef}
 import org.apache.kafka.common.record.TimestampType
 import org.apache.kafka.common.utils.Utils
+import scala.collection._
+import org.apache.kafka.common.config.{AbstractConfig, ConfigDef}
+import kafka.message.BrokerCompressionCodec
+import kafka.message.Message
 
 object Defaults {
   val SegmentSize = kafka.server.Defaults.LogSegmentBytes
@@ -180,7 +186,7 @@ object LogConfig {
   def apply(): LogConfig = LogConfig(new Properties())
 
   def configNames: Seq[String] = configDef.names.asScala.toSeq.sorted
-  
+
   /**
    * Create a log config instance using the given properties and defaults
    */
@@ -196,7 +202,9 @@ object LogConfig {
    */
   def validateNames(props: Properties) {
     val names = configNames
-    for (name <- props.keys.asScala) require(names.contains(name), s"Unknown configuration `$name`.")
+    for (name <- props.keys.asScala)
+		  if (!names.contains(name))
+        throw new InvalidConfigurationException(s"Unknown configuration `$name`.")
   }
 
   /**

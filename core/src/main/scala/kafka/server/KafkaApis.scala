@@ -33,13 +33,14 @@ import kafka.network.RequestChannel.{Session, Response}
 import kafka.security.auth.{Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
 import kafka.utils.{Logging, SystemTime, ZKGroupTopicDirs, ZkUtils}
 import org.apache.kafka.common.errors.{InvalidTopicException, NotLeaderForPartitionException, UnknownTopicOrPartitionException,
-ClusterAuthorizationException}
+ClusterAuthorizationException, TopicExistsException}
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.protocol.{ApiKeys, Errors, SecurityProtocol}
-import org.apache.kafka.common.requests.{ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
-DescribeGroupsRequest, DescribeGroupsResponse, HeartbeatRequest, HeartbeatResponse, JoinGroupRequest, JoinGroupResponse,
-LeaveGroupRequest, LeaveGroupResponse, ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest, LeaderAndIsrResponse,
-StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse, UpdateMetadataRequest, UpdateMetadataResponse}
+import org.apache.kafka.common.requests.{CreateTopicRequest, CreateTopicResponse,
+ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse, DescribeGroupsRequest,
+DescribeGroupsResponse, HeartbeatRequest, HeartbeatResponse, JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest, LeaveGroupResponse,
+ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest, LeaderAndIsrResponse, StopReplicaRequest,
+StopReplicaResponse, ProduceRequest, ProduceResponse, UpdateMetadataResponse, UpdateMetadataRequest}
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.utils.Utils
 import org.apache.kafka.common.{TopicPartition, Node}
@@ -52,6 +53,7 @@ import scala.collection.JavaConverters._
  */
 class KafkaApis(val requestChannel: RequestChannel,
                 val replicaManager: ReplicaManager,
+                val adminManager: AdminManager,
                 val coordinator: GroupCoordinator,
                 val controller: KafkaController,
                 val zkUtils: ZkUtils,
@@ -90,6 +92,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.SYNC_GROUP => handleSyncGroupRequest(request)
         case ApiKeys.DESCRIBE_GROUPS => handleDescribeGroupRequest(request)
         case ApiKeys.LIST_GROUPS => handleListGroupsRequest(request)
+        case ApiKeys.CREATE_TOPIC => handleCreateTopicRequest(request)
         case requestId => throw new KafkaException("Unknown api code " + requestId)
       }
     } catch {
@@ -181,10 +184,17 @@ class KafkaApis(val requestChannel: RequestChannel,
     val updateMetadataResponse =
       if (authorize(request.session, ClusterAction, Resource.ClusterResource)) {
         replicaManager.maybeUpdateMetadataCache(correlationId, updateMetadataRequest, metadataCache)
+
+        updateMetadataRequest.partitionStates.keySet.asScala.map(_.topic).foreach { topic =>
+          adminManager.tryCompleteDelayedTopicOperations(topic)
+        }
+
         new UpdateMetadataResponse(Errors.NONE.code)
       } else {
         new UpdateMetadataResponse(Errors.CLUSTER_AUTHORIZATION_FAILED.code)
       }
+
+
 
     val responseHeader = new ResponseHeader(correlationId)
     requestChannel.sendResponse(new Response(request, new ResponseSend(request.connectionId, responseHeader, updateMetadataResponse)))
@@ -786,8 +796,6 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleDescribeGroupRequest(request: RequestChannel.Request) {
-    import JavaConverters._
-
     val describeRequest = request.body.asInstanceOf[DescribeGroupsRequest]
     val responseHeader = new ResponseHeader(request.header.correlationId)
 
@@ -812,8 +820,6 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleListGroupsRequest(request: RequestChannel.Request) {
-    import JavaConverters._
-
     val responseHeader = new ResponseHeader(request.header.correlationId)
     val responseBody = if (!authorize(request.session, Describe, Resource.ClusterResource)) {
       ListGroupsResponse.fromError(Errors.CLUSTER_AUTHORIZATION_FAILED)
@@ -826,8 +832,6 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleJoinGroupRequest(request: RequestChannel.Request) {
-    import JavaConversions._
-
     val joinGroupRequest = request.body.asInstanceOf[JoinGroupRequest]
     val responseHeader = new ResponseHeader(request.header.correlationId)
 
@@ -835,7 +839,7 @@ class KafkaApis(val requestChannel: RequestChannel,
     def sendResponseCallback(joinResult: JoinGroupResult) {
       val members = joinResult.members map { case (memberId, metadataArray) => (memberId, ByteBuffer.wrap(metadataArray)) }
       val responseBody = new JoinGroupResponse(joinResult.errorCode, joinResult.generationId, joinResult.subProtocol,
-        joinResult.memberId, joinResult.leaderId, members)
+        joinResult.memberId, joinResult.leaderId, members.asJava)
 
       trace("Sending join group response %s for correlation id %d to client %s."
         .format(responseBody, request.header.correlationId, request.header.clientId))
@@ -849,11 +853,11 @@ class KafkaApis(val requestChannel: RequestChannel,
         JoinGroupResponse.UNKNOWN_PROTOCOL,
         JoinGroupResponse.UNKNOWN_MEMBER_ID, // memberId
         JoinGroupResponse.UNKNOWN_MEMBER_ID, // leaderId
-        Map.empty[String, ByteBuffer])
+        Map.empty[String, ByteBuffer].asJava)
       requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, responseHeader, responseBody)))
     } else {
       // let the coordinator to handle join-group
-      val protocols = joinGroupRequest.groupProtocols().map(protocol =>
+      val protocols = joinGroupRequest.groupProtocols().asScala.map(protocol =>
         (protocol.name, Utils.toArray(protocol.metadata))).toList
       coordinator.handleJoinGroup(
         joinGroupRequest.groupId,
@@ -868,8 +872,6 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   def handleSyncGroupRequest(request: RequestChannel.Request) {
-    import JavaConversions._
-
     val syncGroupRequest = request.body.asInstanceOf[SyncGroupRequest]
 
     def sendResponseCallback(memberState: Array[Byte], errorCode: Short) {
@@ -885,7 +887,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         syncGroupRequest.groupId(),
         syncGroupRequest.generationId(),
         syncGroupRequest.memberId(),
-        syncGroupRequest.groupAssignment().mapValues(Utils.toArray(_)),
+        syncGroupRequest.groupAssignment().asScala.mapValues(Utils.toArray(_)),
         sendResponseCallback
       )
     }
@@ -963,6 +965,37 @@ class KafkaApis(val requestChannel: RequestChannel,
         leaveGroupRequest.groupId(),
         leaveGroupRequest.memberId(),
         sendResponseCallback)
+    }
+  }
+
+  def handleCreateTopicRequest(request: RequestChannel.Request) {
+    val createTopicRequest = request.body.asInstanceOf[CreateTopicRequest]
+
+    def sendResponseCallback(results: Map[String, Errors]): Unit = {
+      val respHeader = new ResponseHeader(request.header.correlationId)
+      val responseBody = new CreateTopicResponse(results.asJava)
+
+      trace(s"Sending create topics response $responseBody for correlation id ${request.header.correlationId} to client ${request.header.clientId}.")
+      requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, responseBody)))
+    }
+
+    if(!controller.isActive()) {
+      val results = createTopicRequest.topics.asScala.map { case (topic, _) =>
+        (topic, Errors.STALE_CONTROLLER_EPOCH) //TODO: Correct error
+      }
+      sendResponseCallback(results)
+    } else if (!authorize(request.session, Create, Resource.ClusterResource)) {
+      val results = createTopicRequest.topics.asScala.map { case (topic, _) =>
+        (topic, Errors.CLUSTER_AUTHORIZATION_FAILED)
+      }
+      sendResponseCallback(results)
+    }
+    else {
+      adminManager.createTopics(
+        createTopicRequest.timeout.toInt,
+        createTopicRequest.topics.asScala,
+        sendResponseCallback
+      )
     }
   }
 

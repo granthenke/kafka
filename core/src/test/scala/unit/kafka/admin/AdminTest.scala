@@ -17,7 +17,8 @@
 package kafka.admin
 
 import junit.framework.Assert._
-import org.apache.kafka.common.errors.InvalidTopicException
+import org.apache.kafka.common.errors.{InvalidReplicaAssignmentException, InvalidReplicationFactorException, InvalidTopicException,
+TopicExistsException}
 import org.apache.kafka.common.metrics.Quota
 import org.apache.kafka.common.protocol.ApiKeys
 import org.junit.Test
@@ -26,7 +27,7 @@ import kafka.utils._
 import kafka.log._
 import kafka.zk.ZooKeeperTestHarness
 import kafka.utils.{Logging, ZkUtils, TestUtils}
-import kafka.common.{TopicExistsException, TopicAndPartition}
+import kafka.common.TopicAndPartition
 import kafka.server.{ConfigType, KafkaServer, KafkaConfig}
 import java.io.File
 import TestUtils._
@@ -40,12 +41,12 @@ class AdminTest extends ZooKeeperTestHarness with Logging {
     val brokerList = List(0, 1, 2, 3, 4)
 
     // test 0 replication factor
-    intercept[AdminOperationException] {
+    intercept[InvalidReplicationFactorException] {
       AdminUtils.assignReplicasToBrokers(brokerList, 10, 0)
     }
 
     // test wrong replication factor
-    intercept[AdminOperationException] {
+    intercept[InvalidReplicationFactorException] {
       AdminUtils.assignReplicasToBrokers(brokerList, 10, 6)
     }
 
@@ -73,12 +74,12 @@ class AdminTest extends ZooKeeperTestHarness with Logging {
     TestUtils.createBrokersInZk(zkUtils, brokers)
 
     // duplicate brokers
-    intercept[IllegalArgumentException] {
+    intercept[InvalidReplicaAssignmentException] {
       AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, "test", Map(0->Seq(0,0)))
     }
 
     // inconsistent replication factor
-    intercept[IllegalArgumentException] {
+    intercept[InvalidReplicaAssignmentException] {
       AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, "test", Map(0->Seq(0,1), 1->Seq(0)))
     }
 

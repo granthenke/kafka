@@ -119,6 +119,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
   var logManager: LogManager = null
 
   var replicaManager: ReplicaManager = null
+  var adminManager: AdminManager = null
 
   var dynamicConfigHandlers: Map[String, ConfigHandler] = null
   var dynamicConfigManager: DynamicConfigManager = null
@@ -195,6 +196,9 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
           isShuttingDown)
         replicaManager.startup()
 
+        /* start admin manager */
+        adminManager = new AdminManager(config, metrics, metadataCache, zkUtils)
+
         /* start kafka controller */
         kafkaController = new KafkaController(config, zkUtils, brokerState, kafkaMetricsTime, metrics, threadNamePrefix)
         kafkaController.startup()
@@ -211,7 +215,7 @@ class KafkaServer(val config: KafkaConfig, time: Time = SystemTime, threadNamePr
         }
 
         /* start processing requests */
-        apis = new KafkaApis(socketServer.requestChannel, replicaManager, consumerCoordinator,
+        apis = new KafkaApis(socketServer.requestChannel, replicaManager, adminManager, consumerCoordinator,
           kafkaController, zkUtils, config.brokerId, config, metadataCache, metrics, authorizer)
         requestHandlerPool = new KafkaRequestHandlerPool(config.brokerId, socketServer.requestChannel, apis, config.numIoThreads)
         brokerState.newState(RunningAsBroker)
