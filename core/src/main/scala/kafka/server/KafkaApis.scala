@@ -30,16 +30,17 @@ import kafka.log._
 import kafka.message.{ByteBufferMessageSet, MessageSet}
 import kafka.network._
 import kafka.network.RequestChannel.{Session, Response}
-import kafka.security.auth.{Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
+import kafka.security.auth.{Delete, Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
 import kafka.utils.{Logging, SystemTime, ZKGroupTopicDirs, ZkUtils}
 import org.apache.kafka.common.errors.{InvalidTopicException, NotLeaderForPartitionException, UnknownTopicOrPartitionException,
 ClusterAuthorizationException, TopicExistsException}
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.protocol.{ApiKeys, Errors, SecurityProtocol}
-import org.apache.kafka.common.requests.{CreateTopicRequest, CreateTopicResponse, ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
+import org.apache.kafka.common.requests.{CreateTopicRequest, CreateTopicResponse, DeleteTopicResponse, DeleteTopicRequest,
+ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
 DescribeGroupsRequest, DescribeGroupsResponse, HeartbeatRequest, HeartbeatResponse, JoinGroupRequest, JoinGroupResponse,
-LeaveGroupRequest, LeaveGroupResponse, ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest, LeaderAndIsrResponse,
-StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse}
+LeaveGroupRequest, LeaveGroupResponse, ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest,
+LeaderAndIsrResponse, StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse}
 import org.apache.kafka.common.requests.ProduceResponse.PartitionResponse
 import org.apache.kafka.common.utils.Utils
 import org.apache.kafka.common.{TopicPartition, Node}
@@ -92,6 +93,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.DESCRIBE_GROUPS => handleDescribeGroupRequest(request)
         case ApiKeys.LIST_GROUPS => handleListGroupsRequest(request)
         case ApiKeys.CREATE_TOPIC => handleCreateTopicRequest(request)
+        case ApiKeys.DELETE_TOPIC => handleDeleteTopicRequest(request)
         case requestId => throw new KafkaException("Unknown api code " + requestId)
       }
     } catch {
@@ -955,6 +957,37 @@ class KafkaApis(val requestChannel: RequestChannel,
       adminManager.createTopics(
         createTopicRequest.timeout.toInt,
         createTopicRequest.topics.asScala,
+        sendResponseCallback
+      )
+    }
+  }
+
+  def handleDeleteTopicRequest(request: RequestChannel.Request) {
+    val deleteTopicRequest = request.body.asInstanceOf[DeleteTopicRequest]
+
+    def sendResponseCallback(results: Map[String, Errors]): Unit = {
+      val respHeader = new ResponseHeader(request.header.correlationId)
+      val responseBody = new DeleteTopicResponse(results.asJava)
+
+      trace(s"Sending delete topics response $responseBody for correlation id ${request.header.correlationId} to client ${request.header.clientId}.")
+      requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, responseBody)))
+    }
+
+    // Mark unauthorized topics
+    val deleteInfo = deleteTopicRequest.topics.asScala.map { topic =>
+      if (!authorize(request.session, Delete, new Resource(Topic, topic)))
+        (topic, Errors.TOPIC_AUTHORIZATION_FAILED)
+      else
+        (topic, Errors.NONE)
+    }.toMap
+
+    // If all topics are in error, return immediatly
+    if (!deleteInfo.exists(_._2 == Errors.NONE))
+      sendResponseCallback(deleteInfo)
+    else {
+      adminManager.deleteTopics(
+        deleteTopicRequest.timeout.toInt,
+        deleteInfo,
         sendResponseCallback
       )
     }

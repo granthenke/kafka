@@ -22,6 +22,7 @@ import junit.framework.Assert._
 import kafka.utils.{ZkUtils, TestUtils}
 import kafka.utils.ZkUtils._
 import kafka.server.{KafkaServer, KafkaConfig}
+import org.apache.kafka.common.errors.InvalidTopicException
 import org.junit.Test
 import java.util.Properties
 import kafka.common.{TopicAlreadyMarkedForDeletionException, TopicAndPartition}
@@ -202,7 +203,30 @@ class DeleteTopicTest extends ZooKeeperTestHarness {
     val topic = topicAndPartition.topic
     val servers = createTestTopicAndCluster(topic)
     // start topic deletion
-    AdminUtils.deleteTopic(zkUtils, "test2")
+    try {
+      AdminUtils.deleteTopic(zkUtils, "test2")
+      fail("Expected InvalidTopicException")
+    } catch {
+      case e: InvalidTopicException => // expected exception
+    }
+    // verify that topic test is untouched
+    TestUtils.waitUntilTrue(() => servers.forall(_.getLogManager().getLog(topicAndPartition).isDefined),
+      "Replicas for topic test not created")
+    // test the topic path exists
+    assertTrue("Topic test mistakenly deleted", zkUtils.pathExists(getTopicPath(topic)))
+    // topic test should have a leader
+    val leaderIdOpt = TestUtils.waitUntilLeaderIsElectedOrChanged(zkUtils, topic, 0, 1000)
+    assertTrue("Leader should exist for topic test", leaderIdOpt.isDefined)
+    servers.foreach(_.shutdown())
+  }
+
+  @Test
+  def testDeletePathNonExistingTopic() {
+    val topicAndPartition = TopicAndPartition("test", 0)
+    val topic = topicAndPartition.topic
+    val servers = createTestTopicAndCluster(topic)
+    // set topic deletion path
+    zkUtils.createPersistentPath(getDeleteTopicPath(topic))
     // verify delete topic path for test2 is removed from zookeeper
     TestUtils.verifyTopicDeletion(zkUtils, "test2", 1, servers)
     // verify that topic test is untouched
