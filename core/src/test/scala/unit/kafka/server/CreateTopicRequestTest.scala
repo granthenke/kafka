@@ -17,15 +17,10 @@
 
 package kafka.server
 
-import java.io.{DataInputStream, DataOutputStream}
-import java.net.Socket
 import java.nio.ByteBuffer
 
 import kafka.client.ClientUtils
-import kafka.cluster.Broker
-import kafka.integration.KafkaServerTestHarness
 
-import kafka.network.SocketServer
 import kafka.utils._
 import org.apache.kafka.common.protocol.{Errors, ApiKeys, SecurityProtocol}
 import org.apache.kafka.common.requests.{CreateTopicResponse, CreateTopicRequest, RequestHeader, ResponseHeader}
@@ -39,64 +34,12 @@ import scala.collection.JavaConverters._
   * TODO: This is a pseudo-temporary test implementation to test CreateTopicRequests while we still do not have an AdminClient.
   * Once the AdminClient is added this should be changed to utilize that instead of this custom/duplicated socket code.
   */
-class CreateTopicRequestTest extends KafkaServerTestHarness {
-  val numBrokers = 3
-  def generateConfigs() = {
-    val props = TestUtils.createBrokerConfigs(numBrokers, zkConnect)
-    props.foreach( p => p.setProperty(KafkaConfig.AutoCreateTopicsEnableProp, "false") )
-    props.map(KafkaConfig.fromProps)
-  }
+class CreateTopicRequestTest extends BaseAdminRequestTest {
 
   @Before
   override def setUp() {
     super.setUp()
-    Logger.getLogger(classOf[AdminManager]).setLevel(Level.TRACE)
     Logger.getLogger(classOf[DelayedCreateTopics]).setLevel(Level.TRACE)
-    TestUtils.waitUntilTrue(() => servers.head.metadataCache.getAliveBrokers.size == numBrokers, "Wait for cache to update")
-  }
-
-  private def socketServer = {
-    servers.head.socketServer
-  }
-
-  private def broker = {
-    val broker = servers.head
-    new Broker(broker.config.brokerId, broker.config.hostName, broker.boundPort())
-  }
-
-  private def connect(s: SocketServer = socketServer, protocol: SecurityProtocol = SecurityProtocol.PLAINTEXT): Socket = {
-    new Socket("localhost", s.boundPort(protocol))
-  }
-
-  private def sendRequest(socket: Socket, request: Array[Byte], id: Option[Short] = None) {
-    val outgoing = new DataOutputStream(socket.getOutputStream)
-    id match {
-      case Some(id) =>
-        outgoing.writeInt(request.length + 2)
-        outgoing.writeShort(id)
-      case None =>
-        outgoing.writeInt(request.length)
-    }
-    outgoing.write(request)
-    outgoing.flush()
-  }
-
-  private def receiveResponse(socket: Socket): Array[Byte] = {
-    val incoming = new DataInputStream(socket.getInputStream)
-    val len = incoming.readInt()
-    val response = new Array[Byte](len)
-    incoming.readFully(response)
-    response
-  }
-
-  private def requestAndReceive(request: Array[Byte], id: Option[Short] = None): Array[Byte] = {
-    val plainSocket = connect()
-    try {
-      sendRequest(plainSocket, request, id)
-      receiveResponse(plainSocket)
-    } finally {
-      plainSocket.close()
-    }
   }
 
   @Test
@@ -119,7 +62,7 @@ class CreateTopicRequestTest extends KafkaServerTestHarness {
     val response = sendCreateTopicRequest(request)
 
     val error = response.errors.values.asScala.find(_ != Errors.NONE)
-    assertTrue("There should be no errors", error.isEmpty)
+    assertTrue(s"There should be no errors, found ${response.errors.asScala}", error.isEmpty)
 
     request.topics.asScala.foreach { case (topic, details) =>
       val metadata = ClientUtils.fetchTopicMetadata(Set(topic), Seq(broker.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)),
@@ -201,10 +144,7 @@ class CreateTopicRequestTest extends KafkaServerTestHarness {
   }
 
   private def validateTopicExists(topic: String): Unit = {
-    val metadata = ClientUtils.fetchTopicMetadata(Set(topic), Seq(broker.getBrokerEndPoint(SecurityProtocol.PLAINTEXT)),
-      "validateErrorCreateTopicRequests", 2000, 0).topicsMetadata
-    val metadataForTopic = metadata.filter(p => p.topic.equals(topic)).head
-    assertNotNull("The topic should be created", metadataForTopic)
+    assertTrue("The topic should be created", topicExists(topic))
   }
 
   private def replicaAssignmentToJava(assignments: Map[Int, List[Int]]) = {
