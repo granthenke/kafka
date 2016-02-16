@@ -37,7 +37,8 @@ public enum ApiKeys {
     SYNC_GROUP(14, "SyncGroup"),
     DESCRIBE_GROUPS(15, "DescribeGroups"),
     LIST_GROUPS(16, "ListGroups"),
-    CREATE_TOPIC(17, "CreateTopic");
+    CREATE_TOPIC(17, "CreateTopic"),
+    DELETE_TOPIC(18, "DeleteTopic");
 
     private static ApiKeys[] codeToType;
     public static final int MAX_API_KEY;
