@@ -627,6 +627,20 @@ public class Protocol {
     public static final Schema[] CREATE_TOPIC_REQUEST = new Schema[] {CREATE_TOPIC_REQUEST_V0};
     public static final Schema[] CREATE_TOPIC_RESPONSE = new Schema[] {CREATE_TOPIC_RESPONSE_V0};
 
+    /* DeleteTopic api */
+    public static final Schema DELETE_TOPIC_REQUEST_V0 = new Schema(
+        new Field("topics",
+            new ArrayOf(STRING),
+            "An array of topics to be deleted."));
+
+    public static final Schema DELETE_TOPIC_RESPONSE_V0 = new Schema(
+        new Field("topic_error_codes",
+            new ArrayOf(TOPIC_ERROR_CODE),
+            "An array of per topic error codes."));
+
+    public static final Schema[] DELETE_TOPIC_REQUEST = new Schema[] {DELETE_TOPIC_REQUEST_V0};
+    public static final Schema[] DELETE_TOPIC_RESPONSE = new Schema[] {DELETE_TOPIC_RESPONSE_V0};
+
     /* Leave group api */
     public static final Schema LEAVE_GROUP_REQUEST_V0 = new Schema(new Field("group_id", STRING, "The group id."),
                                                                    new Field("member_id",
@@ -763,6 +777,7 @@ public class Protocol {
         REQUESTS[ApiKeys.DESCRIBE_GROUPS.id] = DESCRIBE_GROUPS_REQUEST;
         REQUESTS[ApiKeys.LIST_GROUPS.id] = LIST_GROUPS_REQUEST;
         REQUESTS[ApiKeys.CREATE_TOPIC.id] = CREATE_TOPIC_REQUEST;
+        REQUESTS[ApiKeys.DELETE_TOPIC.id] = DELETE_TOPIC_REQUEST;
 
         RESPONSES[ApiKeys.PRODUCE.id] = PRODUCE_RESPONSE;
         RESPONSES[ApiKeys.FETCH.id] = FETCH_RESPONSE;
@@ -782,6 +797,7 @@ public class Protocol {
         RESPONSES[ApiKeys.DESCRIBE_GROUPS.id] = DESCRIBE_GROUPS_RESPONSE;
         RESPONSES[ApiKeys.LIST_GROUPS.id] = LIST_GROUPS_RESPONSE;
         RESPONSES[ApiKeys.CREATE_TOPIC.id] = CREATE_TOPIC_RESPONSE;
+        RESPONSES[ApiKeys.DELETE_TOPIC.id] = DELETE_TOPIC_RESPONSE;
 
         /* set the maximum version of each api */
         for (ApiKeys api : ApiKeys.values())

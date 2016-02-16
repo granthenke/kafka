@@ -96,7 +96,10 @@ public class RequestResponseTest {
                 createLeaderAndIsrResponse(),
                 createCreateTopicRequest(),
                 createCreateTopicRequest().getErrorResponse(0, new UnknownServerException()),
-                createCreateTopicResponse()
+                createCreateTopicResponse(),
+                createDeleteTopicRequest(),
+                createDeleteTopicRequest().getErrorResponse(0, new UnknownServerException()),
+                createDeleteTopicResponse()
         );
 
         for (AbstractRequestResponse req : requestResponseList)
@@ -438,5 +441,16 @@ public class RequestResponseTest {
         errors.put("t1", Errors.INVALID_TOPIC_EXCEPTION);
         errors.put("t2", Errors.LEADER_NOT_AVAILABLE);
         return new CreateTopicResponse(errors);
+    }
+
+    private AbstractRequest createDeleteTopicRequest() {
+        return new DeleteTopicRequest(new HashSet<>(Arrays.asList("my_t1", "my_t2")));
+    }
+
+    private AbstractRequestResponse createDeleteTopicResponse() {
+        Map<String, Errors> errors = new HashMap<>();
+        errors.put("t1", Errors.INVALID_TOPIC_EXCEPTION);
+        errors.put("t2", Errors.LEADER_NOT_AVAILABLE);
+        return new DeleteTopicResponse(errors);
     }
 }

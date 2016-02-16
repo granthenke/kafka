@@ -31,13 +31,14 @@ import kafka.log._
 import kafka.message.{ByteBufferMessageSet, Message, MessageSet}
 import kafka.network._
 import kafka.network.RequestChannel.{Session, Response}
-import kafka.security.auth.{Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
+import kafka.security.auth.{Delete, Authorizer, ClusterAction, Group, Create, Describe, Operation, Read, Resource, Topic, Write}
 import kafka.utils.{Logging, SystemTime, ZKGroupTopicDirs, ZkUtils}
 import org.apache.kafka.common.errors.{InvalidTopicException, NotLeaderForPartitionException, UnknownTopicOrPartitionException,
 ClusterAuthorizationException, TopicExistsException}
 import org.apache.kafka.common.metrics.Metrics
 import org.apache.kafka.common.protocol.{ApiKeys, Errors, SecurityProtocol}
-import org.apache.kafka.common.requests.{CreateTopicRequest, CreateTopicResponse, ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
+import org.apache.kafka.common.requests.{CreateTopicRequest, CreateTopicResponse, DeleteTopicResponse, DeleteTopicRequest,
+ListOffsetRequest, ListOffsetResponse, GroupCoordinatorRequest, GroupCoordinatorResponse, ListGroupsResponse,
 DescribeGroupsRequest, DescribeGroupsResponse, HeartbeatRequest, HeartbeatResponse, JoinGroupRequest, JoinGroupResponse,
 LeaveGroupRequest, LeaveGroupResponse, ResponseHeader, ResponseSend, SyncGroupRequest, SyncGroupResponse, LeaderAndIsrRequest, LeaderAndIsrResponse,
 StopReplicaRequest, StopReplicaResponse, ProduceRequest, ProduceResponse, UpdateMetadataRequest, UpdateMetadataResponse}
@@ -92,6 +93,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.DESCRIBE_GROUPS => handleDescribeGroupRequest(request)
         case ApiKeys.LIST_GROUPS => handleListGroupsRequest(request)
         case ApiKeys.CREATE_TOPIC => handleCreateTopicRequest(request)
+        case ApiKeys.DELETE_TOPIC => handleDeleteTopicRequest(request)
         case requestId => throw new KafkaException("Unknown api code " + requestId)
       }
     } catch {
@@ -1007,6 +1009,37 @@ class KafkaApis(val requestChannel: RequestChannel,
     val responseBody = new CreateTopicResponse(results.asJava)
 
     trace(s"Sending create topics response $responseBody for correlation id ${request.header.correlationId} to client ${request.header.clientId}.")
+    requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, responseBody)))
+  }
+
+  def handleDeleteTopicRequest(request: RequestChannel.Request) {
+    val deleteTopicRequest = request.body.asInstanceOf[DeleteTopicRequest]
+
+    val (authorizedTopics, unauthorizedTopics) = deleteTopicRequest.topics.asScala.partition( topic =>
+      authorize(request.session, Delete, new Resource(Topic, topic))
+    )
+
+    val authorizedResults = authorizedTopics.map { topic =>
+      try {
+        AdminUtils.deleteTopic(zkUtils, topic)
+        (topic, Errors.NONE)
+      } catch {
+        case e: TopicAlreadyMarkedForDeletionException =>
+          // swallow the exception, allowing multiple calls for deletion without error
+          (topic, Errors.NONE)
+        case e: Throwable =>
+          error(s"Error processing delete topic request for topic $topic", e)
+          (topic, Errors.forException(e))
+      }
+    }.toMap
+
+    val unauthorizedResults = unauthorizedTopics.map((_, Errors.TOPIC_AUTHORIZATION_FAILED)).toMap
+    val results = authorizedResults ++ unauthorizedResults
+
+    val respHeader = new ResponseHeader(request.header.correlationId)
+    val responseBody = new DeleteTopicResponse(results.asJava)
+
+    trace(s"Sending delete topics response $responseBody for correlation id ${request.header.correlationId} to client ${request.header.clientId}.")
     requestChannel.sendResponse(new RequestChannel.Response(request, new ResponseSend(request.connectionId, respHeader, responseBody)))
   }
 
