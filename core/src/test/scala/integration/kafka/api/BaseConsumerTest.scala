@@ -244,16 +244,6 @@ abstract class BaseConsumerTest extends IntegrationTestHarness {
       partitionAssignment
     }
 
-    /**
-     * Subscribe consumer to a new set of topics.
-     * Since this method most likely be called from a different thread, this function
-     * just "schedules" the subscription change, and actual call to consumer.subscribe is done
-     * in the doWork() method
-     *
-     * This method does not allow to change subscription until doWork processes the previous call
-     * to this method. This is just to avoid race conditions and enough functionality for testing purposes
-     * @param newTopicsToSubscribe
-     */
     def subscribe(newTopicsToSubscribe: List[String]): Unit = {
       if (subscriptionChanged) {
         throw new IllegalStateException("Do not call subscribe until the previous subscribe request is processed.")
